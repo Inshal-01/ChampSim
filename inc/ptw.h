@@ -91,11 +91,18 @@ public:
 
   const champsim::address CR3_addr;
 
+  // ELL305: page-structure-cache switch and walk statistics
+  bool psc_enabled = true;
+  uint64_t stat_walks = 0;
+  uint64_t stat_mem_refs = 0;
+  std::array<uint64_t, 16> stat_start_level{};
+
   explicit PageTableWalker(champsim::ptw_builder builder);
 
   long operate() final;
 
   void begin_phase() final;
+  void end_phase(unsigned cpu) final;
   void print_deadlock() final;
 };
 

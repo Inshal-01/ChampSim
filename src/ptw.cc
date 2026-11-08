@@ -28,6 +28,8 @@
 #include "util/bits.h"   // for bitmask, lg2, splice_bits
 #include "util/span.h"
 #include "vmem.h"
+#include <cstdlib>
+#include <string_view>
 
 PageTableWalker::PageTableWalker(champsim::ptw_builder b)
     : champsim::operable(b.m_clock_period), upper_levels(b.m_uls), lower_level(b.m_ll), NAME(b.m_name),
@@ -43,6 +45,11 @@ PageTableWalker::PageTableWalker(champsim::ptw_builder b)
   for (auto [level, sets, ways] : local_pscl_dims) {
     pscl.emplace_back(sets, ways, pscl_indexer{b.m_vmem->shamt(level)}, pscl_indexer{b.m_vmem->shamt(level)});
   }
+
+   if (const char* env = std::getenv("CHAMPSIM_PSC_OFF"); env != nullptr && std::string_view{env} == "1") {
+    psc_enabled = false;
+  }
+  fmt::print("{} PTW_STAT psc_enabled: {}\n", NAME, psc_enabled ? 1 : 0);
 }
 
 PageTableWalker::mshr_type::mshr_type(const request_type& req, std::size_t level)
@@ -57,7 +64,9 @@ auto PageTableWalker::handle_read(const request_type& handle_pkt, channel_type* 
 {
   pscl_entry walk_init = {handle_pkt.v_address, CR3_addr, std::size(pscl)};
   std::vector<std::optional<pscl_entry>> pscl_hits;
-  std::transform(std::begin(pscl), std::end(pscl), std::back_inserter(pscl_hits), [walk_init](auto& x) { return x.check_hit(walk_init); });
+  if (psc_enabled) {
+    std::transform(std::begin(pscl), std::end(pscl), std::back_inserter(pscl_hits), [walk_init](auto& x) { return x.check_hit(walk_init); });
+  }
   walk_init =
       std::accumulate(std::begin(pscl_hits), std::end(pscl_hits), std::optional<pscl_entry>(walk_init), [](auto x, auto& y) { return y.value_or(*x); }).value();
 
@@ -77,7 +86,12 @@ auto PageTableWalker::handle_read(const request_type& handle_pkt, channel_type* 
                walk_offset.to<int>(), walk_init.level, current_time.time_since_epoch() / clock_period);
   }
 
-  return step_translation(fwd_mshr);
+   auto result = step_translation(fwd_mshr);
+  if (result.has_value()) {
+    ++stat_walks;
+    ++stat_start_level.at(walk_init.level);
+  }
+  return result;
 }
 
 auto PageTableWalker::handle_fill(const mshr_type& fill_mshr) -> std::optional<mshr_type>
@@ -90,8 +104,8 @@ auto PageTableWalker::handle_fill(const mshr_type& fill_mshr) -> std::optional<m
   }
 
   const auto pscl_idx = std::size(pscl) - fill_mshr.translation_level;
-  pscl.at(pscl_idx).fill({fill_mshr.v_address, *fill_mshr.data, fill_mshr.translation_level});
-
+  pscl.at(pscl_idx).fill({fill_mshr.v_address, *fill_mshr.data, fill_mshr.translation_level - 1});
+  
   mshr_type fwd_mshr = fill_mshr;
   fwd_mshr.address = *fill_mshr.data;
   fwd_mshr.translation_level = fill_mshr.translation_level - 1;
@@ -111,11 +125,13 @@ auto PageTableWalker::step_translation(const mshr_type& source) -> std::optional
   packet.is_translated = true;
   packet.type = access_type::TRANSLATION;
 
-  bool success = lower_level->add_rq(packet);
+  
+
+    bool success = lower_level->add_rq(packet);
   if (success) {
+    ++stat_mem_refs;
     return source;
   }
-
   return std::nullopt;
 }
 
@@ -224,6 +240,9 @@ void PageTableWalker::finish_packet(const response_type& packet)
 
 void PageTableWalker::begin_phase()
 {
+    stat_walks = 0;
+    stat_mem_refs = 0;
+    stat_start_level.fill(0);
   for (auto* ul : upper_levels) {
     channel_type::stats_type ul_new_roi_stats;
     channel_type::stats_type ul_new_sim_stats;
@@ -238,5 +257,18 @@ void PageTableWalker::print_deadlock()
   champsim::range_print_deadlock(MSHR, NAME + "_MSHR", "address: {} v_address: {} translation_level: {}", [](const auto& entry) {
     return std::tuple{entry.address, entry.v_address, entry.translation_level};
   });
+
 }
+
+void PageTableWalker::end_phase(unsigned /*cpu*/)
+{
+  fmt::print("{} PTW_STAT walks: {}\n", NAME, stat_walks);
+  fmt::print("{} PTW_STAT mem_refs: {}\n", NAME, stat_mem_refs);
+  for (std::size_t lvl = 0; lvl < std::size(stat_start_level); ++lvl) {
+    if (stat_start_level[lvl] > 0) {
+      fmt::print("{} PTW_STAT start_level_{}: {}\n", NAME, lvl, stat_start_level[lvl]);
+    }
+  }
+}
+
 // LCOV_EXCL_STOP

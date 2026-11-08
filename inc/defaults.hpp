@@ -130,7 +130,7 @@ const auto default_llc = champsim::cache_builder<champsim::cache_builder_module_
                              .reset_wq_checks_full_addr()
                              .prefetch_activate(access_type::LOAD, access_type::PREFETCH);
 
-const auto default_ptw = champsim::ptw_builder{}.bandwidth_factor(2).mshr_factor(5).add_pscl(5, 1, 2).add_pscl(4, 1, 4).add_pscl(3, 2, 4).add_pscl(2, 4, 8);
+const auto default_ptw = champsim::ptw_builder{}.bandwidth_factor(2).mshr_factor(5).latency(2).add_pscl(4, 1, 4).add_pscl(3, 2, 4).add_pscl(2, 4, 8);
 } // namespace champsim::defaults
 
 #endif
