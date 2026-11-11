@@ -46,7 +46,7 @@ PageTableWalker::PageTableWalker(champsim::ptw_builder b)
     pscl.emplace_back(sets, ways, pscl_indexer{b.m_vmem->shamt(level)}, pscl_indexer{b.m_vmem->shamt(level)});
   }
 
-   if (const char* env = std::getenv("CHAMPSIM_PSC_OFF"); env != nullptr && std::string_view{env} == "1") {
+  if (const char* env = std::getenv("CHAMPSIM_PSC_OFF"); env != nullptr && std::string_view{env} == "1") {
     psc_enabled = false;
   }
   fmt::print("{} PTW_STAT psc_enabled: {}\n", NAME, psc_enabled ? 1 : 0);
@@ -72,7 +72,7 @@ auto PageTableWalker::handle_read(const request_type& handle_pkt, channel_type* 
 
   champsim::address_slice walk_offset{
       champsim::dynamic_extent{champsim::data::bits{LOG2_PAGE_SIZE}, champsim::data::bits{champsim::lg2(pte_entry::byte_multiple)}},
-      vmem->get_offset(handle_pkt.address, walk_init.level)};
+      vmem->get_offset(handle_pkt.address, walk_init.level + 1)};
 
   mshr_type fwd_mshr{handle_pkt, walk_init.level};
   fwd_mshr.address = champsim::address{champsim::splice(champsim::page_number{walk_init.ptw_addr}, champsim::page_offset{walk_offset})};
@@ -86,7 +86,7 @@ auto PageTableWalker::handle_read(const request_type& handle_pkt, channel_type* 
                walk_offset.to<int>(), walk_init.level, current_time.time_since_epoch() / clock_period);
   }
 
-   auto result = step_translation(fwd_mshr);
+  auto result = step_translation(fwd_mshr);
   if (result.has_value()) {
     ++stat_walks;
     ++stat_start_level.at(walk_init.level);
@@ -105,7 +105,7 @@ auto PageTableWalker::handle_fill(const mshr_type& fill_mshr) -> std::optional<m
 
   const auto pscl_idx = std::size(pscl) - fill_mshr.translation_level;
   pscl.at(pscl_idx).fill({fill_mshr.v_address, *fill_mshr.data, fill_mshr.translation_level - 1});
-  
+
   mshr_type fwd_mshr = fill_mshr;
   fwd_mshr.address = *fill_mshr.data;
   fwd_mshr.translation_level = fill_mshr.translation_level - 1;
@@ -125,13 +125,12 @@ auto PageTableWalker::step_translation(const mshr_type& source) -> std::optional
   packet.is_translated = true;
   packet.type = access_type::TRANSLATION;
 
-  
-
-    bool success = lower_level->add_rq(packet);
+  bool success = lower_level->add_rq(packet);
   if (success) {
     ++stat_mem_refs;
     return source;
   }
+
   return std::nullopt;
 }
 
@@ -240,24 +239,15 @@ void PageTableWalker::finish_packet(const response_type& packet)
 
 void PageTableWalker::begin_phase()
 {
-    stat_walks = 0;
-    stat_mem_refs = 0;
-    stat_start_level.fill(0);
+  stat_walks = 0;
+  stat_mem_refs = 0;
+  stat_start_level.fill(0);
   for (auto* ul : upper_levels) {
     channel_type::stats_type ul_new_roi_stats;
     channel_type::stats_type ul_new_sim_stats;
     ul->roi_stats = ul_new_roi_stats;
     ul->sim_stats = ul_new_sim_stats;
   }
-}
-
-// LCOV_EXCL_START Exclude the following function from LCOV
-void PageTableWalker::print_deadlock()
-{
-  champsim::range_print_deadlock(MSHR, NAME + "_MSHR", "address: {} v_address: {} translation_level: {}", [](const auto& entry) {
-    return std::tuple{entry.address, entry.v_address, entry.translation_level};
-  });
-
 }
 
 void PageTableWalker::end_phase(unsigned /*cpu*/)
@@ -271,4 +261,11 @@ void PageTableWalker::end_phase(unsigned /*cpu*/)
   }
 }
 
+// LCOV_EXCL_START Exclude the following function from LCOV
+void PageTableWalker::print_deadlock()
+{
+  champsim::range_print_deadlock(MSHR, NAME + "_MSHR", "address: {} v_address: {} translation_level: {}", [](const auto& entry) {
+    return std::tuple{entry.address, entry.v_address, entry.translation_level};
+  });
+}
 // LCOV_EXCL_STOP
